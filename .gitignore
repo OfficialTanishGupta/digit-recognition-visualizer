@@ -1,0 +1,22 @@
+# Environments
+venv/
+.venv/
+env/
+
+# Dependencies
+node_modules/
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# Local environment variables
+.env
+
+# Large model files (Trained models)
+*.h5
+*.keras
+mnist_model/
+
+# Misc
+.vscode/
