@@ -11,10 +11,11 @@ print("Loading data...")
 x_train = x_train.reshape(-1, 784).astype("float32") / 255.0
 x_test = x_test.reshape(-1, 784).astype("float32") / 255.0
 
-# 2. Build the Model
+
+# 2. Build the Model (Keras 3 / TFJS Compatible Way)
 model = models.Sequential([
-    layers.Input(shape=(784,)),
-    layers.Dense(128, activation='relu'),
+    # Move the input shape directly into the first Dense layer
+    layers.Dense(128, activation='relu', input_shape=(784,)), 
     layers.Dense(64, activation='relu'),
     layers.Dense(10, activation='softmax')
 ])
@@ -30,6 +31,7 @@ print("Starting training...")
 model.fit(x_train, y_train, epochs=5, validation_split=0.1)
 
 # 4. Save Native Keras Model
-model.save("mnist_model.keras")
+model.save("mnist_model.h5")
+
 
 
