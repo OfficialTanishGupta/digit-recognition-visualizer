@@ -8,7 +8,11 @@ export default function App() {
   const [model, setModel] = useState(null);
   const [output, setOutput] = useState(Array(10).fill(0));
   const [status, setStatus] = useState("Loading model...");
-  const [activations, setActivations] = useState({ hidden: [], output: [] });
+  const [activations, setActivations] = useState({
+    input: 0,
+    hidden: [0, 0, 0, 0],
+    output: [0, 0],
+  });
   const [grid, setGrid] = useState(
     Array(28)
       .fill(null)
@@ -21,136 +25,143 @@ export default function App() {
     async function loadModel() {
       try {
         const m = await tf.loadLayersModel("/model/model.json");
-        // DEBUG: Check your model structure in the browser console (F12)
-        console.log(
-          "Model Layers:",
-          m.layers.map((l, i) => `${i}: ${l.name}`),
-        );
-        m.summary(); // Prints architecture to console
-
         setModel(m);
         setStatus("Model Ready!");
       } catch (err) {
-        console.error("Path Error:", err);
-        setStatus("Error loading model files");
+        setStatus("Error loading model");
       }
     }
     loadModel();
   }, []);
 
   useEffect(() => {
-    if (model) predictWithActivations();
+    if (model) predict();
   }, [grid, model]);
 
-  const predictWithActivations = async () => {
+  const predict = async () => {
     if (!model) return;
+    tf.tidy(() => {
+      const flatData = grid.flat().map((v) => (v ? 1.0 : 0.0));
+      const inputTensor = tf.tensor2d(flatData, [1, 784]);
 
-    try {
-      const results = tf.tidy(() => {
-        const flatData = grid.flat().map((v) => (v ? 1.0 : 0.0));
-        const input = tf.tensor2d(flatData, [1, 784]);
-
-        // Find the first Dense or Flatten layer to use as "hidden"
-        // Most MNIST models use layer 0 or 1 for the first set of neurons
-        const hiddenLayerIdx = model.layers.length > 1 ? 0 : 0;
-
-        const intermediateModel = tf.model({
-          inputs: model.inputs,
-          outputs: [model.layers[hiddenLayerIdx].output, model.outputs[0]],
-        });
-
-        const [hiddenOut, finalOut] = intermediateModel.predict(input);
-
-        return {
-          hidden: Array.from(hiddenOut.dataSync()).slice(0, 20), // Grab first 20 neurons
-          output: Array.from(finalOut.dataSync()),
-        };
+      // Get real data from the model layers
+      const hiddenLayer = model.layers[0];
+      const intermediateModel = tf.model({
+        inputs: model.inputs,
+        outputs: [hiddenLayer.output, model.outputs[0]],
       });
+      const [hOut, fOut] = intermediateModel.predict(inputTensor);
 
-      setActivations(results);
-      setOutput(results.output);
-      setPredictedIndex(results.output.indexOf(Math.max(...results.output)));
-    } catch (e) {
-      console.error("Visualization Error:", e);
-    }
+      const hData = Array.from(hOut.dataSync());
+      const fData = Array.from(fOut.dataSync());
+
+      // Update state with actual activation levels (normalized)
+      setActivations({
+        input: flatData.filter((v) => v > 0).length / 100, // Average input density
+        hidden: [hData[0], hData[1], hData[2], hData[3]], // Real neuron values
+        output: [fData[predictedIndex || 0], fData[(predictedIndex + 1) % 10]], // Top 2 outputs
+      });
+      setOutput(fData);
+      setPredictedIndex(fData.indexOf(Math.max(...fData)));
+    });
   };
 
-  // Canvas Drawing Logic
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !activations.hidden.length) return;
+    if (!canvas) return;
     const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, 400, 300);
 
-    ctx.clearRect(0, 0, 400, 400);
+    const layers = [
+      {
+        count: 3,
+        x: 50,
+        vals: [activations.input, activations.input, activations.input],
+      },
+      { count: 4, x: 200, vals: activations.hidden },
+      { count: 2, x: 350, vals: activations.output },
+    ];
 
-    // Draw active pixels to hidden neurons
-    grid.forEach((row, r) => {
-      row.forEach((cell, c) => {
-        if (cell > 0) {
-          activations.hidden.forEach((hVal, i) => {
-            if (hVal < 0.01) return;
-            ctx.beginPath();
-            ctx.moveTo(c * 2 + 10, r * 2 + 150); // Grid position
-            ctx.lineTo(200, i * 15 + 50); // Hidden layer position
-            ctx.strokeStyle = `rgba(0, 123, 255, ${Math.min(hVal, 0.2)})`;
-            ctx.lineWidth = 0.5;
-            ctx.stroke();
-          });
-        }
+    const getY = (index, total) => (300 / (total + 1)) * (index + 1);
+
+    // Draw Connections
+    layers.forEach((layer, i) => {
+      if (i === layers.length - 1) return;
+      const nextLayer = layers[i + 1];
+      layer.vals.forEach((v1, j) => {
+        nextLayer.vals.forEach((v2, k) => {
+          ctx.beginPath();
+          ctx.moveTo(layer.x, getY(j, layer.count));
+          ctx.lineTo(nextLayer.x, getY(k, nextLayer.count));
+          // Line glows based on the activation of the two nodes it connects
+          const strength = (v1 + v2) / 2;
+          ctx.strokeStyle = `rgba(0, 123, 255, ${0.1 + strength * 0.8})`;
+          ctx.lineWidth = 0.5 + strength * 2;
+          ctx.stroke();
+        });
       });
     });
 
-    // Draw hidden neurons to output
-    activations.hidden.forEach((hVal, i) => {
-      activations.output.forEach((oVal, j) => {
+    // Draw Nodes
+    layers.forEach((layer) => {
+      layer.vals.forEach((val, i) => {
+        const y = getY(i, layer.count);
         ctx.beginPath();
-        ctx.moveTo(200, i * 15 + 50);
-        ctx.lineTo(380, j * 35 + 40); // Connection to output digits
-        ctx.strokeStyle = `rgba(255, 100, 0, ${oVal * 0.3})`;
-        ctx.lineWidth = oVal * 2;
+        ctx.arc(layer.x, y, 18, 0, Math.PI * 2);
+        // Node turns blue/glows based on real-time activation
+        ctx.fillStyle = `rgba(0, 123, 255, ${0.2 + val})`;
+        ctx.fill();
+        ctx.strokeStyle = "#333";
+        ctx.lineWidth = 2;
         ctx.stroke();
       });
     });
-  }, [activations, grid]);
+  }, [activations]);
 
   return (
-    <div
-      style={{
-        padding: 20,
-        textAlign: "center",
-        backgroundColor: "#f0f2f5",
-        minHeight: "100vh",
-      }}
-    >
-      <h3 style={{ color: status.includes("Ready") ? "green" : "red" }}>
-        {status}
-      </h3>
-      <OutputBar output={output} predictedIndex={predictedIndex} />
+    <div style={{ padding: 20, textAlign: "center", fontFamily: "sans-serif" }}>
+      <h2 style={{ color: "#333" }}>
+        Digit Recognized:{" "}
+        <span style={{ color: "blue", fontSize: "40px" }}>
+          {predictedIndex}
+        </span>
+      </h2>
+      <p>{status}</p>
 
       <div
         style={{
           display: "flex",
           justifyContent: "center",
-          gap: "20px",
+          gap: "30px",
           marginTop: 20,
         }}
       >
-        <div style={{ border: "2px solid #333", background: "white" }}>
+        <div style={{ border: "3px solid #333", background: "white" }}>
           <DrawingGrid grid={grid} setGrid={setGrid} />
         </div>
 
         <div
           style={{
             background: "white",
-            padding: 10,
-            borderRadius: 8,
+            padding: "20px",
+            borderRadius: "10px",
             border: "1px solid #ccc",
           }}
         >
-          <p style={{ fontSize: "12px", color: "#666" }}>
-            Neural Connections (Live)
-          </p>
-          <canvas ref={canvasRef} width={400} height={400} />
+          <canvas ref={canvasRef} width={400} height={300} />
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginTop: 10,
+              fontSize: "12px",
+              fontWeight: "bold",
+            }}
+          >
+            <span>INPUT</span>
+            <span>HIDDEN</span>
+            <span>OUTPUT</span>
+          </div>
         </div>
       </div>
 
@@ -162,9 +173,14 @@ export default function App() {
               .map(() => Array(28).fill(0)),
           )
         }
-        style={{ marginTop: 20, padding: "10px 20px", cursor: "pointer" }}
+        style={{
+          marginTop: 20,
+          padding: "10px 30px",
+          fontSize: "16px",
+          cursor: "pointer",
+        }}
       >
-        Clear Grid
+        Clear
       </button>
     </div>
   );
